@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>X</title>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#0a0a0a;color:#f5f5f5;height:100dvh;display:flex;flex-direction:column}
+.header{padding:12px 16px;border-bottom:1px solid #222;background:#111;display:flex;align-items:center;gap:10px}
+.logo{width:30px;height:30px;background:#fff;color:#000;border-radius:8px;display:flex;align-items:center;justify-content:center;font-weight:800}
+.tabs{margin-left:auto;display:flex;gap:4px}
+.tabs button{background:transparent;border:none;color:#888;padding:8px 12px;border-radius:8px;cursor:pointer;font-size:14px}
+.tabs button.active{background:#1a1a1a;color:#fff}
+.panel{flex:1;display:none;flex-direction:column;overflow:hidden}
+.panel.active{display:flex}
+.config{padding:8px 14px;background:#0e0e0e;display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:13px}
+.config input,.config select{background:#1a1a1a;border:1px solid #333;color:#fff;padding:7px 10px;border-radius:8px}
+.chat{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:12px}
+.message{max-width:85%;padding:12px 16px;border-radius:18px;line-height:1.55;animation:fade .18s ease}
+@keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1}}
+.user{align-self:flex-end;background:#222;border-bottom-right-radius:4px}
+.assistant{align-self:flex-start;background:#111;border:1px solid #2a2a2a;border-bottom-left-radius:4px}
+.typing{display:flex;align-items:center;gap:10px;padding:12px 16px;background:#111;border:1px solid #222;border-radius:18px;width:fit-content}
+.dots{display:flex;gap:4px}
+.dots span{width:6px;height:6px;background:#666;border-radius:50%;animation:b 1.4s infinite}
+.dots span:nth-child(2){animation-delay:.2s}
+.dots span:nth-child(3){animation-delay:.4s}
+@keyframes b{0%,60%,100%{transform:translateY(0);opacity:.4}30%{transform:translateY(-5px);opacity:1}}
+.input-area{padding:12px 14px;border-top:1px solid #222;background:#111;display:flex;gap:8px;align-items:flex-end}
+textarea{flex:1;background:#1a1a1a;border:1px solid #333;color:#fff;padding:12px;border-radius:14px;resize:none;max-height:100px;outline:none;font-size:16px}
+.btn{background:#fff;color:#000;border:none;height:44px;padding:0 16px;border-radius:12px;font-weight:600;cursor:pointer}
+.icon{background:#222;color:#fff;border:none;width:44px;height:44px;border-radius:50%;cursor:pointer;font-size:18px}
+.recording{background:#ff3b30 !important}
+#map{height:100%;width:100%;background:#0d0d0d}
+.map-status{position:absolute;top:12px;left:12px;background:rgba(0,0,0,.7);padding:8px 12px;border-radius:8px;font-size:13px;z-index:1000}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="logo">X</div>
+  <strong>X</strong>
+  <div class="tabs">
+    <button class="active" onclick="switchTab('chat',this)">Chat</button>
+    <button onclick="switchTab('map',this)">Peta</button>
+  </div>
+</div>
+
+<div class="config">
+  <select id="model">
+    <option value="groq">Groq</option>
+    <option value="gemini">Gemini</option>
+  </select>
+  <input type="password" id="apiKey" placeholder="API Key" style="width:160px">
+  <button class="icon" onclick="startGPS()" title="GPS" style="width:auto;padding:0 12px;border-radius:10px">📍</button>
+  <label style="color:#888;display:flex;align-items:center;gap:6px;margin-left:auto">
+    <input type="checkbox" id="autoSpeak" checked> Suara
+  </label>
+</div>
+
+<div id="chatPanel" class="panel active">
+  <div class="chat" id="chat"></div>
+  <div class="input-area">
+    <button class="icon" id="micBtn">🎤</button>
+    <textarea id="input" rows="1" placeholder="Ketik atau VN..."></textarea>
+    <button class="btn" id="send">Kirim</button>
+  </div>
+</div>
+
+<div id="mapPanel" class="panel">
+  <div id="map"></div>
+  <div class="map-status" id="mapStatus">Tekan 📍 untuk mulai zoom</div>
+</div>
+
+<script>
+const chat = document.getElementById("chat");
+const input = document.getElementById("input");
+const sendBtn = document.getElementById("send");
+const micBtn = document.getElementById("micBtn");
+const autoSpeak = document.getElementById("autoSpeak");
+let recognition = null, isRecording = false, map = null;
+
+function switchTab(name, btn) {
+  document.querySelectorAll(".panel").forEach(p => p.classList.remove("active"));
+  document.querySelectorAll(".tabs button").forEach(b => b.classList.remove("active"));
+  document.getElementById(name + "Panel").classList.add("active");
+  btn.classList.add("active");
+  if (name === "map" && !map) initMap();
+}
+
+function initMap() {
+  map = L.map("map", { zoomControl: false }).setView([-2.5, 118], 5);
+  L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
+    attribution: "© OSM © CARTO"
+  }).addTo(map);
+  setTimeout(() => map.invalidateSize(), 200);
+}
+
+async function zoomSequence(lat, lon) {
+  if (!map) {
+    switchTab("map", document.querySelectorAll(".tabs button")[1]);
+    await new Promise(r => setTimeout(r, 400));
+  }
+  const status = document.getElementById("mapStatus");
+  const steps = [
+    { name: "Indonesia", lat: -2.5, lon: 118, zoom: 5 },
+    { name: "Jawa Tengah", lat: -7.15, lon: 110.14, zoom: 8 },
+    { name: "Lokasimu", lat: lat, lon: lon, zoom: 15 }
+  ];
+  for (const s of steps) {
+    status.textContent = "Menuju " + s.name + "...";
+    map.flyTo([s.lat, s.lon], s.zoom, { duration: 1.8 });
+    await new Promise(r => setTimeout(r, 2000));
+  }
+  L.marker([lat, lon]).addTo(map).bindPopup("Lokasi kamu").openPopup();
+  status.textContent = "Sampai di lokasi";
+}
+
+function startGPS() {
+  if (!navigator.geolocation) return alert("GPS tidak didukung");
+  navigator.geolocation.getCurrentPosition(
+    pos => zoomSequence(pos.coords.latitude, pos.coords.longitude),
+    () => alert("Izin lokasi ditolak")
+  );
+}
+
+// Voice
+if (window.SpeechRecognition || window.webkitSpeechRecognition) {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  recognition = new SR();
+  recognition.lang = "id-ID";
+  recognition.onresult = e => { input.value = e.results[0][0].transcript; send(); };
+  recognition.onend = () => { isRecording = false; micBtn.classList.remove("recording"); micBtn.textContent = "🎤"; };
+}
+micBtn.onclick = () => {
+  if (!recognition) return alert("Voice hanya di Chrome / Edge");
+  if (isRecording) recognition.stop();
+  else { isRecording = true; micBtn.classList.add("recording"); micBtn.textContent = "⏹️"; recognition.start(); }
+};
+
+function addMessage(role, content) {
+  const d = document.createElement("div");
+  d.className = "message " + role;
+  d.innerHTML = role === "assistant" && window.marked ? marked.parse(content || "") : (content || "").replace(/\n/g, "<br>");
+  chat.appendChild(d);
+  chat.scrollTop = chat.scrollHeight;
+  return d;
+}
+
+function showTyping() {
+  const el = document.createElement("div");
+  el.className = "typing";
+  el.innerHTML = `<div class="dots"><span></span><span></span><span></span></div><span>Menganalisis...</span>`;
+  chat.appendChild(el);
+  chat.scrollTop = chat.scrollHeight;
+  setTimeout(() => { const s = el.querySelector("span:last-child"); if (s) s.textContent = "Mengetik..."; }, 700);
+  return el;
+}
+
+function speak(text) {
+  if (!autoSpeak.checked || !window.speechSynthesis) return;
+  speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance(text.slice(0, 350));
+  u.lang = "id-ID";
+  speechSynthesis.speak(u);
+}
+
+async function send() {
+  const text = input.value.trim();
+  if (!text) return;
+  const key = document.getElementById("apiKey").value.trim();
+  const model = document.getElementById("model").value;
+  if (!key) return alert("Masukkan API Key");
+
+  addMessage("user", text);
+  input.value = "";
+  sendBtn.disabled = true;
+  const indicator = showTyping();
+  const msgDiv = addMessage("assistant", "");
+
+  try {
+    let full = "";
+    if (model === "groq") {
+      const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+        method: "POST",
+        headers: { "Authorization": "Bearer " + key, "Content-Type": "application/json" },
+        body: JSON.stringify({ model: "llama-3.3-70b-versatile", messages: [{ role: "user", content: text }], stream: true })
+      });
+      if (!res.ok) throw new Error("Groq error " + res.status);
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        for (const line of decoder.decode(value).split("\n")) {
+          if (!line.startsWith("data: ") || line.includes("[DONE]")) continue;
+          try {
+            const t = JSON.parse(line.slice(6)).choices?.[0]?.delta?.content || "";
+            if (t) { full += t; msgDiv.innerHTML = marked.parse(full); chat.scrollTop = chat.scrollHeight; }
+          } catch {}
+        }
+      }
+    } else {
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ contents: [{ parts: [{ text }] }] })
+      });
+      if (!res.ok) throw new Error("Gemini error " + res.status);
+      const data = await res.json();
+      full = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+      msgDiv.innerHTML = marked.parse(full);
+    }
+    indicator.remove();
+    if (full) speak(full);
+  } catch (err) {
+    indicator.remove();
+    msgDiv.innerHTML = `<span style="color:#ff6b6b">${err.message}</span>`;
+  }
+  sendBtn.disabled = false;
+}
+
+sendBtn.onclick = send;
+input.onkeydown = e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } };
+
+addMessage("assistant", "Halo, saya **X**. Tekan 🎤 untuk VN atau 📍 untuk peta.");
+</script>
+</body>
+</html>
